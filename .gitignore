@@ -1,5 +1,5 @@
-data/raw/
-data/procressed/
-/ipynb_checkpoints/
-__pycache__/
+data/raw/ 
+data/processed/ 
+.ipynb_checkpoints/ 
+__pycache__/ 
 .DS_Store
