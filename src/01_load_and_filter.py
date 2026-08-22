@@ -125,7 +125,8 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     # walk into the same comma-parsing trap on those columns later.
     for col in ["numfloors", "bldgarea", "officearea", "lotarea",
                 "bldgfront", "bldgdepth", "lotfront", "lotdepth",
-                "assessland", "assesstot", "builtfar", "residfar", "commfar"]:
+                "assessland", "assesstot", "builtfar", "residfar", "commfar",
+                "numbldgs"]:
         if col in df.columns:
             df[col] = _to_numeric(df[col])
             df.loc[df[col] <= 0, col] = np.nan
