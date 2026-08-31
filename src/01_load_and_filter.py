@@ -131,6 +131,17 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = _to_numeric(df[col])
             df.loc[df[col] <= 0, col] = np.nan
 
+    # Floor-area BREAKDOWN columns: resarea (residential), comarea
+    # (commercial), retailarea. These legitimately CAN be zero -- an
+    # all-office building genuinely has resarea == 0, that's real data,
+    # not a missing-data code -- so they get comma-stripped/coerced to
+    # numeric like everything else, but WITHOUT the <=0 -> NaN treatment
+    # above (that would wrongly wipe out real zeros). Needed for Step 3's
+    # RPTL 467-m non-residential-share eligibility check.
+    for col in ["resarea", "comarea", "retailarea"]:
+        if col in df.columns:
+            df[col] = _to_numeric(df[col])
+
     # Normalize historic-district / landmark blanks to a clean boolean-ish
     # flag rather than leaving mixed NaN/empty-string representations.
     for col in ["histdist", "landmark"]:

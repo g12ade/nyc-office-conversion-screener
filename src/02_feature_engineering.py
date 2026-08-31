@@ -33,8 +33,15 @@ IN_PATH = "data/processed/candidates.parquet"
 OUT_PATH = "data/processed/candidates_features.parquet"
 
 CURRENT_YEAR = 2026
-CITY_OF_YES_CUTOFF_YEAR = 1990  # City of Yes: legal eligibility = offices
-                                 # built before 1990
+# City of Yes for Housing Opportunity (adopted Dec 2024) allows "any office
+# building constructed prior to Dec. 31, 1990" to convert -- i.e. built in
+# 1990 or earlier still qualifies, so the comparison below must be <=, not <.
+# Source: NYC DCP Housing Opportunity conversions guide (verified Aug 2026),
+# https://www.nyc.gov/assets/planning/downloads/pdf/our-work/plans/citywide/city-of-yes-housing-opportunity/housing-opportunity-guide-conversions.pdf
+# NOT modeled: Special Mixed Use Districts keep a later cutoff (12/10/1997)
+# -- PLUTO's zonedist1 doesn't cleanly identify SMU overlays, so this is a
+# known gap, not an oversight -- flag it if you need SMU-precise results.
+CITY_OF_YES_CUTOFF_YEAR = 1990
 
 # Rule-of-thumb max distance from a window to still count as usable,
 # daylight-served space is roughly 30 ft; double-loaded-corridor layouts
@@ -132,7 +139,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # ---- Building age vs. City of Yes cutoff -------------------------------
     df["building_age_yrs"] = CURRENT_YEAR - df["yearbuilt"]
-    df["pre_1990_eligible"] = df["yearbuilt"] < CITY_OF_YES_CUTOFF_YEAR
+    df["pre_1990_eligible"] = df["yearbuilt"] <= CITY_OF_YES_CUTOFF_YEAR
 
     print("[engineer_features] Added floor-plate, FAR headroom, assessed "
           "value, and building-age features")
