@@ -4,7 +4,7 @@ A data pipeline that screens every commercial tax lot in Manhattan against two 2
 
 **The finding, in one sentence:** policy solved the legal barrier to office-to-residential conversion, but the real binding constraint left is physical building geometry — and how "physically viable" gets defined swings the eligible share anywhere from under 1% to over 12%, even though the *relative ranking* of the best candidates stays remarkably stable.
 
-**[Live interactive demo →](#interactive-app-streamlit)** — adjust the viability score weights and floor-plate depth cutoff yourself and watch the shortlist reshuffle in real time.
+**[Live interactive demo →](https://nyc-office-conversion-screener.streamlit.app/)** — adjust the viability score weights and floor-plate depth cutoff yourself and watch the shortlist reshuffle in real time.
 
 ## Background: the two policies this project screens against
 
@@ -101,7 +101,7 @@ Each script prints its own progress, filter counts, and sanity checks as it runs
 
 `app.py` is a live, interactive version of Steps 4 and 6: instead of a single fixed viability score, it lets you adjust the score's component weights (floor-plate depth / FAR headroom / assessed value / building age) and the hard floor-plate depth cutoff with sliders, and watch the Tier 1 shortlist, the candidate map, and the depth-cutoff sensitivity chart update live. It's the same methodology as the pipeline scripts, not a simplified re-implementation — it reuses Step 4's precomputed percentile-rank component scores and reweights them the same way `sensitivity_test()` does.
 
-**Live demo:** _add your deployed Streamlit Community Cloud URL here once deployed (see below)._
+**Live demo:** https://nyc-office-conversion-screener.streamlit.app/
 
 Run it locally:
 
