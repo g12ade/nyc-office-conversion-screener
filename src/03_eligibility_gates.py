@@ -62,6 +62,7 @@ RPTL 467-m (enacted April 2024):
   Source: https://www.nyc.gov/assets/hpd/downloads/pdfs/services/467m-requirements-faq.pdf
 """
 
+import json
 import os
 import sys
 
@@ -70,6 +71,7 @@ import pandas as pd
 
 IN_PATH = "data/processed/candidates_features.parquet"
 OUT_PATH = "data/processed/candidates_eligible.parquet"
+STATS_PATH = "data/processed/pipeline_stats.json"
 
 MIN_NONRESIDENTIAL_SHARE = 0.90
 
@@ -97,12 +99,15 @@ def load_features(path: str = IN_PATH) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # ELIGIBILITY GATES
 # --------------------------------------------------------------------------
-def build_eligible_universe(df: pd.DataFrame) -> pd.DataFrame:
+def build_eligible_universe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
     """Apply the legal eligibility gates as an actual filter waterfall,
     same style as Step 1 -- these are real yes/no statutory tests, not
     judgment calls, so unlike Step 2's physical features they're
-    appropriate to hard-gate on."""
+    appropriate to hard-gate on. Also returns this stage's (label, count)
+    pairs so main() can append them onto Step 1's stats file for
+    06_visualize.py -- see STATS_PATH / save_stats()."""
     df = df.copy()
+    stages: list[tuple[str, int]] = []
 
     # ---- 467-m: >= 90% non-residential floor area -------------------------
     if "resarea" in df.columns:
@@ -125,15 +130,41 @@ def build_eligible_universe(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[df["pre_1990_eligible"]]
     print(f"{'After City of Yes: built <= 1990':<50}{len(df):>10,}")
+    stages.append(("City of Yes: built <=1990", len(df)))
 
     df = df[df["rptl467m_nonres_eligible"]]
     print(f"{'After 467-m: >= ' + f'{MIN_NONRESIDENTIAL_SHARE:.0%}' + ' non-residential':<50}{len(df):>10,}")
+    stages.append((f"467-m: >={MIN_NONRESIDENTIAL_SHARE:.0%} non-residential", len(df)))
 
     print("=" * 60)
     print(f"{'LEGALLY ELIGIBLE UNIVERSE':<50}{len(df):>10,}")
     print("=" * 60 + "\n")
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), stages
+
+
+def save_stats(new_stages: list[tuple[str, int]], path: str = STATS_PATH) -> None:
+    """Append this step's (label, count) stages onto the stats file Step 1
+    started. Reads the existing file (written earlier in this same
+    pipeline run by 01_load_and_filter.py) and extends it, rather than
+    overwriting -- Step 3 runs after Step 1 in the pipeline, and the
+    combined 8-stage list is what 06_visualize.py's waterfall chart needs.
+    If the stats file isn't there (e.g. Step 1 was run with an older
+    version of the script, or the file was manually deleted), this just
+    warns and skips rather than crashing the whole pipeline over a chart
+    label -- 06_visualize.py falls back to its own hardcoded numbers in
+    that case."""
+    if not os.path.exists(path):
+        print(f"[save_stats] WARNING: {path} not found (was Step 1 run with "
+              "the current script version?) -- skipping. 06_visualize.py "
+              "will fall back to hardcoded funnel stages.")
+        return
+    with open(path) as f:
+        stats = json.load(f)
+    stats["funnel_stages"] = stats.get("funnel_stages", []) + new_stages
+    with open(path, "w") as f:
+        json.dump(stats, f, indent=2)
+    print(f"[save_stats] Appended {len(new_stages)} funnel-stage counts to {path}")
 
 
 # --------------------------------------------------------------------------
@@ -182,12 +213,14 @@ def profile_eligible(df: pd.DataFrame) -> None:
 # --------------------------------------------------------------------------
 def main():
     df = load_features()
-    df = build_eligible_universe(df)
+    df, funnel_stages = build_eligible_universe(df)
     profile_eligible(df)
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     df.to_parquet(OUT_PATH, index=False)
     print(f"[main] Saved {len(df):,} legally-eligible rows to {OUT_PATH}")
+
+    save_stats(funnel_stages)
 
 
 if __name__ == "__main__":

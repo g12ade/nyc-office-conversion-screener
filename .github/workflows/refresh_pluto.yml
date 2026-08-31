@@ -1,0 +1,144 @@
+name: Refresh PLUTO data
+
+# Fully automatic PLUTO refresh. PLUTO isn't a real-time feed -- NYC Open
+# Data releases a new version every few months (confirmed via the
+# dataset's own Socrata metadata: consecutive `rowsUpdatedAt` timestamps
+# have landed roughly 3 months apart) -- so this runs weekly and, on
+# every run, first does one cheap metadata check before doing anything
+# expensive. 51 of ~52 runs a year are expected to be a no-op: one HTTP
+# request, compare a timestamp, exit. Only when NYC Open Data has
+# actually published something new does it download the ~450MB CSV,
+# rerun the full 6-step pipeline, and commit the refreshed outputs
+# straight to main (no PR review step -- chosen deliberately: George
+# opted for fully automatic over a review gate). Pushing to main here is
+# what triggers Streamlit Community Cloud's own auto-redeploy on the live
+# app, so a merged push is the entire deploy story end to end.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 13:00 UTC (~9am ET)
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: "Run the full pipeline even if PLUTO hasn't changed (use this to test the workflow)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # Cheap version check. The dataset ID (64uk-42ks) is stable across
+      # PLUTO version releases (unlike NYC.gov's versioned zip filenames,
+      # e.g. pluto_26v2.zip, which would require this workflow to already
+      # know the next version string in advance) -- Socrata's lightweight
+      # metadata endpoint exposes rowsUpdatedAt as a Unix timestamp that
+      # changes whenever the underlying dataset is updated, without
+      # requiring the ~450MB CSV export itself.
+      # ------------------------------------------------------------------
+      - name: Check PLUTO version
+        id: check
+        run: |
+          set -euo pipefail
+          REMOTE_UPDATED=$(curl -fsSL --retry 3 --retry-delay 5 \
+            "https://data.cityofnewyork.us/api/views/64uk-42ks.json" \
+            | jq -r '.rowsUpdatedAt')
+
+          if [ -z "$REMOTE_UPDATED" ] || [ "$REMOTE_UPDATED" == "null" ]; then
+            echo "[check] Couldn't read rowsUpdatedAt from Socrata metadata -- treating as no-op rather than risking a bad run." >&2
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LOCAL_UPDATED=""
+          if [ -f data/.pluto_version ]; then
+            LOCAL_UPDATED=$(cat data/.pluto_version)
+          fi
+
+          echo "remote_updated=$REMOTE_UPDATED" >> "$GITHUB_OUTPUT"
+          echo "[check] remote rowsUpdatedAt=$REMOTE_UPDATED  local=$LOCAL_UPDATED"
+
+          if [ "$REMOTE_UPDATED" != "$LOCAL_UPDATED" ] || [ "${{ inputs.force_refresh }}" == "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pipeline dependencies
+        if: steps.check.outputs.changed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Download fresh PLUTO CSV
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p data/raw
+          curl -fsSL --retry 3 --retry-delay 10 --max-time 1800 \
+            -o data/raw/pluto.csv \
+            "https://data.cityofnewyork.us/api/views/64uk-42ks/rows.csv?accessType=DOWNLOAD"
+          echo "[download] $(du -h data/raw/pluto.csv | cut -f1) saved to data/raw/pluto.csv"
+
+      - name: Run pipeline (Steps 1-6)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          python src/01_load_and_filter.py
+          python src/02_feature_engineering.py
+          python src/03_eligibility_gates.py
+          python src/04_viability_score.py
+          python src/05_validation.py
+          python src/06_visualize.py
+
+      # ------------------------------------------------------------------
+      # Regenerate the README's static waterfall preview image so it
+      # doesn't silently go stale the moment the underlying data changes
+      # -- the whole point of "fully automatic" is that nothing quietly
+      # drifts out of sync with a live re-run.
+      # ------------------------------------------------------------------
+      - name: Install Playwright (for preview screenshot)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Regenerate README preview image
+        if: steps.check.outputs.changed == 'true'
+        run: python scripts/generate_preview.py
+
+      - name: Record new PLUTO version
+        if: steps.check.outputs.changed == 'true'
+        run: echo "${{ steps.check.outputs.remote_updated }}" > data/.pluto_version
+
+      - name: Commit and push refreshed outputs
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            data/.pluto_version \
+            data/processed/candidates_scored.parquet \
+            data/processed/validation_report.csv \
+            outputs/ \
+            assets/waterfall_preview.png
+          if git diff --cached --quiet; then
+            echo "[commit] Pipeline re-ran but produced no file changes -- nothing to commit."
+          else
+            printf 'Automated PLUTO refresh (%s)\n\nPLUTO rowsUpdatedAt changed to %s. Pipeline (Steps 1-6) re-run against the fresh CSV; this commit updates the scored candidate universe, the validation report, and the generated visuals to match. Pushing to main triggers Streamlit Community Cloud'"'"'s auto-redeploy on the live app.\n' \
+              "$(date -u +%Y-%m-%d)" "${{ steps.check.outputs.remote_updated }}" > /tmp/commit_msg.txt
+            git commit -F /tmp/commit_msg.txt
+            git push
+          fi

@@ -21,6 +21,7 @@ Outputs:
     outputs/candidate_map.html
 """
 
+import json
 import os
 import sys
 
@@ -30,17 +31,19 @@ import plotly.express as px
 
 SCORED_PATH = "data/processed/candidates_scored.parquet"
 VALIDATION_PATH = "data/processed/validation_report.csv"
+STATS_PATH = "data/processed/pipeline_stats.json"
 OUT_DIR = "outputs"
 
 TIER1_PCTILE = 0.90
 
-# Funnel stage counts. These are hardcoded rather than recomputed by
-# re-reading the full 858,602-row raw PLUTO file again -- Steps 1-3 have
-# printed and reproduced these exact numbers on every run so far (stable,
-# not a one-off fluke), and re-scanning the ~600MB CSV a sixth time in
-# this project just to redraw a chart isn't worth the runtime. If you
-# rerun Steps 1-3 in the future and the numbers change, update this list.
-FUNNEL_STAGES = [
+# Fallback funnel stage counts, used only if data/processed/pipeline_stats.json
+# is missing (e.g. an old checkout, or someone ran only Steps 4-6 against a
+# scored file from elsewhere without re-running Steps 1 and 3). These are the
+# real counts from this project's original PLUTO run -- as of the automated
+# PLUTO-refresh workflow, Steps 1 and 3 write their live, per-run counts to
+# STATS_PATH instead, so the chart reflects whatever data actually produced
+# the current candidates_scored.parquet rather than staying frozen here.
+_FALLBACK_FUNNEL_STAGES = [
     ("Starting PLUTO rows (citywide)", 858_602),
     ("Manhattan", 42_544),
     ("Office class or >50% office share", 3_108),
@@ -50,6 +53,32 @@ FUNNEL_STAGES = [
     ("City of Yes: built <=1990", 1_242),
     ("467-m: >=90% non-residential", 1_221),
 ]
+
+
+def load_funnel_stages(path: str = STATS_PATH) -> list[tuple[str, int]]:
+    """Load the 8-stage funnel from the stats file Steps 1 and 3 wrote
+    during this run, falling back to the historical hardcoded counts if
+    the file is missing or malformed."""
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                stages = json.load(f)["funnel_stages"]
+            stages = [(label, int(count)) for label, count in stages]
+            if len(stages) == 8:
+                print(f"[load_funnel_stages] Loaded live funnel stages from {path}")
+                return stages
+            print(f"[load_funnel_stages] WARNING: {path} has {len(stages)} "
+                  "stages, expected 8 -- falling back to hardcoded counts.")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            print(f"[load_funnel_stages] WARNING: couldn't parse {path} ({e}) "
+                  "-- falling back to hardcoded counts.")
+    else:
+        print(f"[load_funnel_stages] {path} not found -- falling back to "
+              "hardcoded counts. Re-run Steps 1 and 3 to generate live stats.")
+    return _FALLBACK_FUNNEL_STAGES
+
+
+FUNNEL_STAGES = load_funnel_stages()
 
 
 def load_scored(path: str = SCORED_PATH) -> pd.DataFrame:
@@ -90,7 +119,15 @@ def make_waterfall(out_dir: str) -> None:
         "Legally eligible universe",
     ]
     overview_values = [FUNNEL_STAGES[0][1], FUNNEL_STAGES[1][1], FUNNEL_STAGES[-1][1]]
-    overview_pct = ["100%", "5% of citywide", "0.1% of citywide"]
+    # Computed from overview_values rather than hardcoded strings -- these
+    # percentages need to move if a PLUTO refresh changes the underlying
+    # counts, same reasoning as switching FUNNEL_STAGES itself off a fixed
+    # constant.
+    overview_pct = [
+        "100%",
+        f"{overview_values[1] / overview_values[0] * 100:.0f}% of citywide",
+        f"{overview_values[2] / overview_values[0] * 100:.1f}% of citywide",
+    ]
     overview_text = [f"{v:,}  ({p})" for v, p in zip(overview_values, overview_pct)]
 
     detail_stages = FUNNEL_STAGES[1:]  # Manhattan through 467-m eligible

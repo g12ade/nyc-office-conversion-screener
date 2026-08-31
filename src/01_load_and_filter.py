@@ -17,6 +17,7 @@ Output:
     data/processed/candidates.parquet
 """
 
+import json
 import os
 import sys
 
@@ -28,6 +29,7 @@ import pandas as pd
 # --------------------------------------------------------------------------
 RAW_PATH = "data/raw/pluto.csv"
 OUT_PATH = "data/processed/candidates.parquet"
+STATS_PATH = "data/processed/pipeline_stats.json"
 
 BOROUGH = "MN"          # Manhattan. (Future work: extend to "BK"/"QN" for
                          # Downtown Brooklyn / Long Island City.)
@@ -162,34 +164,47 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # FILTER
 # --------------------------------------------------------------------------
-def build_universe(df: pd.DataFrame) -> pd.DataFrame:
+def build_universe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
     """Apply the filter waterfall that defines the candidate universe,
-    printing a before -> after count at every cut."""
+    printing a before -> after count at every cut. Also returns the
+    stage-by-stage counts (label, count) so main() can persist them for
+    06_visualize.py to read dynamically -- see STATS_PATH below. Keeping
+    this list in sync with the print statements (same labels, same order)
+    is what lets the waterfall chart reflect a *live* run instead of a
+    frozen set of numbers from whenever someone last eyeballed the output."""
     print("\n" + "=" * 60)
     print("FILTER WATERFALL")
     print("=" * 60)
 
+    stages: list[tuple[str, int]] = []
+
     n0 = len(df)
     print(f"{'Starting rows':<45}{n0:>10,}")
+    stages.append(("Starting PLUTO rows (citywide)", n0))
 
     df = df[df["borough"] == BOROUGH]
     print(f"{'After borough == ' + BOROUGH:<45}{len(df):>10,}")
+    stages.append(("Manhattan", len(df)))
 
     is_office_class = df["bldgclass"].str.startswith("O", na=False)
     office_share = df["officearea"] / df["bldgarea"]
     is_office_share = office_share > OFFICE_AREA_SHARE
     df = df[is_office_class | is_office_share]
     print(f"{'After office-class OR office-share filter':<45}{len(df):>10,}")
+    stages.append(("Office class or >50% office share", len(df)))
 
     df = df[df["numfloors"] >= MIN_FLOORS]
     print(f"{'After numfloors >= ' + str(MIN_FLOORS):<45}{len(df):>10,}")
+    stages.append((f"{MIN_FLOORS}+ floors", len(df)))
 
     df = df[df["bldgarea"] >= MIN_BLDG_SF]
     print(f"{'After bldgarea >= ' + f'{MIN_BLDG_SF:,}':<45}{len(df):>10,}")
+    stages.append((f"{MIN_BLDG_SF:,}+ SF", len(df)))
 
     footprint_cols = ["bldgfront", "bldgdepth", "lotfront", "lotdepth"]
     df = df.dropna(subset=[c for c in footprint_cols if c in df.columns])
     print(f"{'After valid footprint dimensions':<45}{len(df):>10,}")
+    stages.append(("Valid footprint dimensions", len(df)))
 
     print("=" * 60)
     print(f"{'FINAL CANDIDATE UNIVERSE':<45}{len(df):>10,}")
@@ -204,7 +219,20 @@ def build_universe(df: pd.DataFrame) -> pd.DataFrame:
               "(>40,000). Filters may be too loose — you're probably "
               "catching irrelevant buildings.")
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), stages
+
+
+def save_stats(funnel_stages: list[tuple[str, int]], path: str = STATS_PATH) -> None:
+    """Write this run's Step 1 funnel-stage counts to a small JSON stats
+    file. Overwrites any prior contents -- Step 1 always runs first in the
+    pipeline, so a fresh run should start the stats file fresh too.
+    03_eligibility_gates.py (Step 3) appends its own two stages onto this
+    same file after Step 1 has written it; 06_visualize.py (Step 6) reads
+    the combined result instead of a hardcoded constant."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({"funnel_stages": funnel_stages}, f, indent=2)
+    print(f"[save_stats] Saved {len(funnel_stages)} funnel-stage counts to {path}")
 
 
 # --------------------------------------------------------------------------
@@ -267,12 +295,14 @@ def profile(df: pd.DataFrame) -> None:
 def main():
     df = load_pluto()
     df = clean(df)
-    df = build_universe(df)
+    df, funnel_stages = build_universe(df)
     profile(df)
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     df.to_parquet(OUT_PATH, index=False)
     print(f"[main] Saved {len(df):,} candidate rows to {OUT_PATH}")
+
+    save_stats(funnel_stages)
 
 
 if __name__ == "__main__":
