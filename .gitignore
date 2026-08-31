@@ -1,5 +1,7 @@
-data/raw/ 
-data/processed/ 
-.ipynb_checkpoints/ 
-__pycache__/ 
+data/raw/
+data/processed/*
+!data/processed/candidates_scored.parquet
+!data/processed/validation_report.csv
+.ipynb_checkpoints/
+__pycache__/
 .DS_Store
