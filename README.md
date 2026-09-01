@@ -26,7 +26,7 @@ Run in order — each step reads the previous step's output.
 
 ### The filter waterfall
 
-858,602 citywide tax lots → 42,544 in Manhattan → 3,108 office-class or majority-office-share → 1,980 with 6+ floors → 1,372 at 50,000+ SF → 1,318 with valid footprint data → 1,242 built on/before 1990 (City of Yes) → **1,221 legally eligible candidates** (467-m non-residential test).
+858,602 citywide tax lots → 42,544 in Manhattan → 3,108 office-class or majority-office-share → 1,980 with 6+ floors → 1,372 at 50,000+ SF → 1,318 with valid footprint data → 1,242 built on/before 1990 (City of Yes) → **1,212 legally eligible candidates** (467-m non-residential test). *(Live count as of the latest automated PLUTO refresh — see "Automatic updates" below; this number moves as the underlying data does.)*
 
 ![Filter and eligibility waterfall](assets/waterfall_preview.png)
 
@@ -36,7 +36,7 @@ Every legally eligible building, colored by its viability score, with the top-de
 
 ## Key results
 
-- **1,221 of 42,544** Manhattan office buildings are legally eligible under both policies.
+- **1,212 of 42,544** Manhattan office buildings are legally eligible under both policies.
 - **Physical viability is the real constraint, and it's sensitive to assumptions.** Depending on where the floor-plate depth cutoff is drawn (50–90 ft, no legal basis for any specific value), the physically-viable share of the eligible universe swings from 0.3% to 12.5% — roughly a 40x range.
 - **The ranking is far more robust than the cutoff.** Re-running the composite score with the depth weight pushed from 0.30 to 0.70 (rescaling the other weights proportionally) still produces 76–100% overlap in the top-decile ("Tier 1") shortlist — the same buildings keep surfacing near the top regardless of exactly how much weight depth gets.
 - **Top-scoring candidates are older, shallower loft buildings, not deep postwar towers** — e.g. 14 Reade St, 115 W 29th St, 107 Grand St, 115 W 30th St, 209 W 38th St, mostly pre-1930 7–14 story buildings.
@@ -47,7 +47,7 @@ Every legally eligible building, colored by its viability score, with the top-de
 - **Zoning-district-specific eligibility** (which C/M districts qualify) is not independently gated — could not verify a definitive, current list from primary sources in the time available.
 - **Special Mixed Use District exception** (a later 1997 cutoff instead of 1990) is not identifiable from this dataset.
 - **467-m's 6-unit minimum, commencement/completion window, and 25%-affordable/80%-AMI requirement** are project- or deal-level terms, not pre-conversion building characteristics PLUTO can gate on — documented, not computed.
-- **Floor-plate depth is a proxy**, not a measured value — PLUTO's `bldgdepth` is a bounding-box measurement that breaks down for full-block/superblock assembled lots. 58 such buildings were flagged in Step 2's candidate universe (1,318 buildings); 51 of them remain in the final legally-eligible/scored universe shipped in this repo (1,221 buildings) and are excluded from the depth score rather than trusted at face value — the two counts differ because Step 3's legal eligibility gates removed a handful of them for unrelated reasons.
+- **Floor-plate depth is a proxy**, not a measured value — PLUTO's `bldgdepth` is a bounding-box measurement that breaks down for full-block/superblock assembled lots. 58 such buildings were flagged in Step 2's candidate universe (1,318 buildings); 49 of them remain in the final legally-eligible/scored universe shipped in this repo (1,212 buildings) and are excluded from the depth score rather than trusted at face value — the two counts differ because Step 3's legal eligibility gates removed a handful of them for unrelated reasons.
 - **Validation sample is small (13, not statistically powered)**, and address matching is exact-string rather than BBL-based — a building whose PLUTO record uses a different official address than its press-covered marketing name reports as "not found" even if it's really in the data. 5 of 13 known conversions hit exactly this limitation.
 
 ## Repo structure
@@ -127,7 +127,11 @@ PLUTO isn't a real-time feed — NYC Open Data publishes a new version every few
 
 This is deliberately fully automatic rather than PR-gated — every number the workflow can change is a mechanical re-run of already-reviewed logic against new source data, not a change to the logic itself. The waterfall chart's stage counts (`data/processed/pipeline_stats.json`, written by Steps 1 and 3 each run) are read dynamically by Step 6 for exactly this reason — a naive automation that kept the chart's numbers hardcoded would have silently gone stale the first time PLUTO actually updated.
 
+A second, monthly schedule forces a full refresh regardless of whether `rowsUpdatedAt` changed. This closes a real gap found during the workflow's first real-infrastructure run: individual PLUTO parcel records can be updated (e.g. as an in-progress office conversion changes a building's `resarea`/`comarea`) without the dataset-level `rowsUpdatedAt` metadata bumping — so a weekly run that only trusts that timestamp could in principle miss a real, small update indefinitely between two full dataset releases. The monthly forced run is the backstop; worst case it's ~12 extra pipeline runs a year that turn out to be no-ops content-wise.
+
 Trigger a manual test run anytime from the repo's **Actions** tab → *Refresh PLUTO data* → *Run workflow*, with "Run the full pipeline even if PLUTO hasn't changed" checked, to force a full re-run regardless of whether the metadata timestamp has moved.
+
+A `.gitattributes` rule (`*.csv text eol=lf`) keeps the pipeline's committed CSV output on LF line endings regardless of which platform last touched it, so an automated re-commit from GitHub's Linux runners never produces a spurious line-ending-only diff against a file previously saved from a Windows checkout.
 
 ## Stack
 

@@ -5,7 +5,7 @@ name: Refresh PLUTO data
 # dataset's own Socrata metadata: consecutive `rowsUpdatedAt` timestamps
 # have landed roughly 3 months apart) -- so this runs weekly and, on
 # every run, first does one cheap metadata check before doing anything
-# expensive. 51 of ~52 runs a year are expected to be a no-op: one HTTP
+# expensive. 51 of ~52 weekly runs are expected to be a no-op: one HTTP
 # request, compare a timestamp, exit. Only when NYC Open Data has
 # actually published something new does it download the ~450MB CSV,
 # rerun the full 6-step pipeline, and commit the refreshed outputs
@@ -13,10 +13,23 @@ name: Refresh PLUTO data
 # opted for fully automatic over a review gate). Pushing to main here is
 # what triggers Streamlit Community Cloud's own auto-redeploy on the live
 # app, so a merged push is the entire deploy story end to end.
-
+#
+# A second, monthly schedule forces a full refresh regardless of whether
+# rowsUpdatedAt changed. This closes a real gap found during this
+# automation's first real-infrastructure test run: individual PLUTO
+# parcel records can apparently be updated (e.g. as an in-progress office
+# conversion changes a building's resarea/comarea) without the dataset-
+# level rowsUpdatedAt metadata field bumping -- so a weekly run that only
+# trusts that timestamp could in principle miss a real, small update
+# indefinitely between two full dataset-level releases. The monthly
+# forced run is the backstop: worst case it's ~12 extra full pipeline
+# runs a year that turn out to be no-ops content-wise (cheap on a public
+# repo's free Actions minutes); best case it catches exactly the kind of
+# quiet parcel-level drift the weekly check-only path can't see.
 on:
   schedule:
-    - cron: "0 13 * * 1" # Mondays 13:00 UTC (~9am ET)
+    - cron: "0 13 * * 1"   # Mondays 13:00 UTC (~9am ET) -- cheap metadata-only check
+    - cron: "0 14 1 * *"   # 1st of the month, 14:00 UTC -- forced full refresh (see comment above)
   workflow_dispatch:
     inputs:
       force_refresh:
@@ -42,6 +55,11 @@ jobs:
       # metadata endpoint exposes rowsUpdatedAt as a Unix timestamp that
       # changes whenever the underlying dataset is updated, without
       # requiring the ~450MB CSV export itself.
+      #
+      # This check is force-overridden on the monthly cron (see the
+      # top-of-file comment) and on a manual workflow_dispatch with
+      # force_refresh checked, using github.event.schedule to tell the
+      # two cron schedules apart.
       # ------------------------------------------------------------------
       - name: Check PLUTO version
         id: check
@@ -65,7 +83,13 @@ jobs:
           echo "remote_updated=$REMOTE_UPDATED" >> "$GITHUB_OUTPUT"
           echo "[check] remote rowsUpdatedAt=$REMOTE_UPDATED  local=$LOCAL_UPDATED"
 
-          if [ "$REMOTE_UPDATED" != "$LOCAL_UPDATED" ] || [ "${{ inputs.force_refresh }}" == "true" ]; then
+          MONTHLY_FORCE="false"
+          if [ "${{ github.event.schedule }}" == "0 14 1 * *" ]; then
+            MONTHLY_FORCE="true"
+            echo "[check] Monthly forced-refresh schedule fired -- running the full pipeline regardless of rowsUpdatedAt."
+          fi
+
+          if [ "$REMOTE_UPDATED" != "$LOCAL_UPDATED" ] || [ "${{ inputs.force_refresh }}" == "true" ] || [ "$MONTHLY_FORCE" == "true" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
